@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VCF File Splitter</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+        }
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px 15px 0 0 !important;
+            padding: 20px;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            transition: transform 0.2s;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        .progress {
+            height: 25px;
+            border-radius: 10px;
+        }
+        .file-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+        }
+        .drop-zone {
+            border: 3px dashed #667eea;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #f8f9fa;
+        }
+        .drop-zone:hover {
+            background: #e9ecef;
+            border-color: #764ba2;
+        }
+        .drop-zone.dragover {
+            background: #e7f3ff;
+            border-color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="card-header text-center">
+                <h2 class="mb-0"><i class="bi bi-person-vcard"></i> VCF File Splitter</h2>
+                <p class="mb-0 mt-2">Split large VCF files into 5MB chunks</p>
+            </div>
+            <div class="card-body p-4">
+                <div class="drop-zone" id="dropZone">
+                    <i class="bi bi-cloud-upload mb-3" style="font-size: 48px; color: #667eea;"></i>
+                    <h5>Drop VCF file here</h5>
+                    <p class="text-muted mb-3">or</p>
+                    <input type="file" id="fileInput" accept=".vcf" class="d-none">
+                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                        Browse Files
+                    </button>
+                </div>
+
+                <div class="mt-4">
+                    <label for="chunkSizeSelect" class="form-label"><strong>Chunk Size</strong></label>
+                    <select class="form-select" id="chunkSizeSelect" onchange="updateChunkSize()">
+                        <option value="0.015625">16 KB</option>
+                        <option value="0.03125">32 KB</option>
+                        <option value="0.0625">64 KB</option>
+                        <option value="0.125">128 KB</option>
+                        <option value="0.25">256 KB</option>
+                        <option value="0.5">512 KB</option>
+                        <option value="1">1 MB</option>
+                        <option value="2">2 MB</option>
+                        <option value="3" selected>3 MB  (Default)</option>
+                        <option value="4">4 MB</option>
+                        <option value="5">5 MB</option>
+                        <option value="6">6 MB</option>
+                        <option value="7">7 MB</option>
+                        <option value="8">8 MB</option>
+                        <option value="9">9 MB</option>
+                        <option value="10">10 MB</option>
+                    </select>
+                </div>
+
+                <div id="fileInfo" class="file-info d-none">
+                    <h6>File Information</h6>
+                    <p class="mb-1"><strong>Name:</strong> <span id="fileName"></span></p>
+                    <p class="mb-1"><strong>Size:</strong> <span id="fileSize"></span></p>
+                    <p class="mb-0"><strong>Chunks:</strong> <span id="chunkCount"></span></p>
+                </div>
+
+                <div id="progressContainer" class="mt-4 d-none">
+                    <label class="form-label"><strong>Processing...</strong></label>
+                    <div class="progress">
+                        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%">0%</div>
+                    </div>
+                    <p class="text-muted mt-2 mb-0"><small id="progressText">Starting...</small></p>
+                </div>
+
+                <button id="splitBtn" class="btn btn-primary w-100 mt-4 d-none" onclick="splitFile()">
+                    Split & Download
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let selectedFile = null;
+        let CHUNK_SIZE = 3 * 1024 * 1024; // 3MB in bytes (default)
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const splitBtn = document.getElementById('splitBtn');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+
+        // Drag and drop handlers
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        function updateChunkSize() {
+            const selectedMB = parseFloat(document.getElementById('chunkSizeSelect').value);
+            CHUNK_SIZE = selectedMB * 1024 * 1024;
+            
+            // Update file info if a file is already selected
+            if (selectedFile) {
+                displayFileInfo(selectedFile);
+            }
+        }
+
+        function handleFile(file) {
+            // Validate file type
+            if (!file.name.toLowerCase().endsWith('.vcf')) {
+                alert('Please select a VCF file (.vcf extension)');
+                return;
+            }
+
+            if (file.size === 0) {
+                alert('The selected file is empty');
+                return;
+            }
+
+            selectedFile = file;
+            displayFileInfo(file);
+        }
+
+        function displayFileInfo(file) {
+            const chunkCount = Math.ceil(file.size / CHUNK_SIZE);
+            
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileSize').textContent = formatFileSize(file.size);
+            document.getElementById('chunkCount').textContent = chunkCount + ' file(s)';
+            
+            fileInfo.classList.remove('d-none');
+            splitBtn.classList.remove('d-none');
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        async function splitFile() {
+            if (!selectedFile) {
+                alert('Please select a file first');
+                return;
+            }
+
+            splitBtn.disabled = true;
+            progressContainer.classList.remove('d-none');
+            
+            try {
+                const zip = new JSZip();
+                const fileContent = await readFileAsText(selectedFile);
+                const totalSize = new Blob([fileContent]).size;
+                const chunkCount = Math.ceil(totalSize / CHUNK_SIZE);
+
+                // Parse VCF to handle vCard boundaries properly
+                const vCards = parseVCF(fileContent);
+                updateProgress(10, `Found ${vCards.length} contacts`);
+
+                // Distribute vCards into chunks
+                const chunks = distributeVCards(vCards);
+                updateProgress(30, `Creating ${chunks.length} chunks...`);
+
+                // Create files for each chunk
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunkContent = chunks[i].join('\n');
+                    const fileName = `${selectedFile.name.replace('.vcf', '')}_part${i + 1}.vcf`;
+                    zip.file(fileName, chunkContent);
+                    
+                    const progress = 30 + ((i + 1) / chunks.length * 60);
+                    updateProgress(progress, `Adding chunk ${i + 1} of ${chunks.length}...`);
+                }
+
+                updateProgress(90, 'Generating ZIP file...');
+                const zipBlob = await zip.generateAsync({
+                    type: 'blob',
+                    compression: 'DEFLATE',
+                    compressionOptions: { level: 6 }
+                });
+
+                updateProgress(95, 'Starting download...');
+                downloadZip(zipBlob);
+                
+                updateProgress(100, 'Complete!');
+                
+                setTimeout(() => {
+                    resetUI();
+                }, 2000);
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('An error occurred while splitting the file: ' + error.message);
+                resetUI();
+            }
+        }
+
+        function parseVCF(content) {
+            const vCards = [];
+            const lines = content.split(/\r?\n/);
+            let currentCard = [];
+            
+            for (let line of lines) {
+                if (line.trim() === 'BEGIN:VCARD') {
+                    currentCard = [line];
+                } else if (line.trim() === 'END:VCARD') {
+                    currentCard.push(line);
+                    vCards.push(currentCard.join('\n'));
+                    currentCard = [];
+                } else if (currentCard.length > 0) {
+                    currentCard.push(line);
+                }
+            }
+            
+            return vCards;
+        }
+
+        function distributeVCards(vCards) {
+            const chunks = [];
+            let currentChunk = [];
+            let currentSize = 0;
+
+            for (let vCard of vCards) {
+                const vCardSize = new Blob([vCard]).size + 1; // +1 for newline
+                
+                if (currentSize + vCardSize > CHUNK_SIZE && currentChunk.length > 0) {
+                    // Current chunk would exceed limit, start new chunk
+                    chunks.push(currentChunk);
+                    currentChunk = [vCard];
+                    currentSize = vCardSize;
+                } else {
+                    // Add to current chunk
+                    currentChunk.push(vCard);
+                    currentSize += vCardSize;
+                }
+            }
+
+            // Add the last chunk if it has content
+            if (currentChunk.length > 0) {
+                chunks.push(currentChunk);
+            }
+
+            return chunks;
+        }
+
+        function readFileAsText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(new Error('Failed to read file'));
+                reader.readAsText(file);
+            });
+        }
+
+        function updateProgress(percent, text) {
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = Math.round(percent) + '%';
+            progressText.textContent = text;
+        }
+
+        function downloadZip(blob) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${selectedFile.name.replace('.vcf', '')}_split.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function resetUI() {
+            selectedFile = null;
+            fileInput.value = '';
+            fileInfo.classList.add('d-none');
+            splitBtn.classList.add('d-none');
+            progressContainer.classList.add('d-none');
+            splitBtn.disabled = false;
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+        }
+    </script>
+</body>
+</html>
