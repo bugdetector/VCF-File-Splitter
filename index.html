@@ -226,12 +226,12 @@
             
             try {
                 const zip = new JSZip();
-                const fileContent = await readFileAsText(selectedFile);
-                const totalSize = new Blob([fileContent]).size;
+                const fileBytes = await readFileAsArrayBuffer(selectedFile);
+                const totalSize = fileBytes.byteLength;
                 const chunkCount = Math.ceil(totalSize / CHUNK_SIZE);
 
-                // Parse VCF to handle vCard boundaries properly
-                const vCards = parseVCF(fileContent);
+                // Parse VCF on raw bytes so contact encodings are preserved exactly.
+                const vCards = parseVCF(fileBytes);
                 updateProgress(10, `Found ${vCards.length} contacts`);
 
                 // Distribute vCards into chunks
@@ -240,7 +240,7 @@
 
                 // Create files for each chunk
                 for (let i = 0; i < chunks.length; i++) {
-                    const chunkContent = chunks[i].join('\n');
+                    const chunkContent = combineByteArrays(chunks[i]);
                     const fileName = `${selectedFile.name.replace('.vcf', '')}_part${i + 1}.vcf`;
                     zip.file(fileName, chunkContent);
                     
@@ -273,21 +273,38 @@
 
         function parseVCF(content) {
             const vCards = [];
-            const lines = content.split(/\r?\n/);
-            let currentCard = [];
-            
-            for (let line of lines) {
-                if (line.trim() === 'BEGIN:VCARD') {
-                    currentCard = [line];
-                } else if (line.trim() === 'END:VCARD') {
-                    currentCard.push(line);
-                    vCards.push(currentCard.join('\n'));
-                    currentCard = [];
-                } else if (currentCard.length > 0) {
-                    currentCard.push(line);
+            let currentCardStart = -1;
+            let lineStart = 0;
+
+            for (let i = 0; i <= content.length; i++) {
+                const isLineBreak = i === content.length || content[i] === 10 || content[i] === 13;
+                if (!isLineBreak) {
+                    continue;
                 }
+
+                let lineEnd = i;
+                let nextLineStart = i;
+
+                if (i < content.length && content[i] === 13 && content[i + 1] === 10) {
+                    nextLineStart = i + 2;
+                } else if (i < content.length) {
+                    nextLineStart = i + 1;
+                }
+
+                if (lineMatches(content, lineStart, lineEnd, 'BEGIN:VCARD')) {
+                    currentCardStart = lineStart;
+                } else if (currentCardStart !== -1 && lineMatches(content, lineStart, lineEnd, 'END:VCARD')) {
+                    vCards.push(content.slice(currentCardStart, nextLineStart));
+                    currentCardStart = -1;
+                }
+
+                lineStart = nextLineStart;
             }
-            
+
+            if (currentCardStart !== -1) {
+                vCards.push(content.slice(currentCardStart));
+            }
+
             return vCards;
         }
 
@@ -297,7 +314,7 @@
             let currentSize = 0;
 
             for (let vCard of vCards) {
-                const vCardSize = new Blob([vCard]).size + 1; // +1 for newline
+                const vCardSize = vCard.byteLength;
                 
                 if (currentSize + vCardSize > CHUNK_SIZE && currentChunk.length > 0) {
                     // Current chunk would exceed limit, start new chunk
@@ -319,13 +336,56 @@
             return chunks;
         }
 
-        function readFileAsText(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = (e) => resolve(e.target.result);
-                reader.onerror = (e) => reject(new Error('Failed to read file'));
-                reader.readAsText(file);
-            });
+        async function readFileAsArrayBuffer(file) {
+            const buffer = await file.arrayBuffer();
+            return new Uint8Array(buffer);
+        }
+
+        function lineMatches(content, start, end, value) {
+            const ascii = value.toUpperCase();
+            let left = start;
+            let right = end;
+
+            while (left < right && isAsciiWhitespace(content[left])) {
+                left++;
+            }
+
+            while (right > left && isAsciiWhitespace(content[right - 1])) {
+                right--;
+            }
+
+            if (right - left !== ascii.length) {
+                return false;
+            }
+
+            for (let i = 0; i < ascii.length; i++) {
+                if (toUpperAsciiCode(content[left + i]) !== ascii.charCodeAt(i)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        function isAsciiWhitespace(byte) {
+            return byte === 9 || byte === 32;
+        }
+
+        function toUpperAsciiCode(byte) {
+            return byte >= 97 && byte <= 122 ? byte - 32 : byte;
+        }
+
+        function combineByteArrays(chunks) {
+            const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+            const combined = new Uint8Array(totalLength);
+            let offset = 0;
+
+            for (const chunk of chunks) {
+                combined.set(chunk, offset);
+                offset += chunk.byteLength;
+            }
+
+            return combined;
         }
 
         function updateProgress(percent, text) {
